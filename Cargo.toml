@@ -1,0 +1,40 @@
+[package]
+name = "fstar-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# MCP server framework (paiml-mcp-sdk with streamable HTTP)
+pmcp = { git = "https://github.com/paiml/rust-mcp-sdk", features = ["streamable-http"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Time utilities
+chrono = "0.4"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# UUID for session IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Lazy static for shared state
+lazy_static = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Regex for config env var substitution
+regex = "1"
+
+[dev-dependencies]
+# Additional test utilities
+tokio-test = "0.4"
