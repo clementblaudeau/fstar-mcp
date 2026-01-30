@@ -3,9 +3,11 @@
 use crate::fstar::config::FStarConfig;
 use crate::fstar::messages::*;
 use crate::fstar::protocol::{parse_response, FStarResponse, JsonlInterface};
+use crate::is_verbose;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -72,10 +74,14 @@ impl FStarProcess {
         let cwd = config.cwd_or(file_path.parent().unwrap_or(Path::new(".")));
         let args = config.build_args(&file_path.to_string_lossy(), lax);
 
-        tracing::debug!("Spawning F* with args: {:?} in {:?}", args, cwd);
+        if is_verbose() {
+            tracing::info!("[F* spawn] {} {} (cwd: {:?})", fstar_exe, args.join(" "), cwd);
+        } else {
+            tracing::debug!("Spawning F* with args: {:?} in {:?}", args, cwd);
+        }
 
         let mut child = Command::new(&fstar_exe)
-            .args(&args[1..]) // Skip the first arg (--ide) since we're using the exe directly
+            .args(&args) // Pass all args including --ide
             .current_dir(&cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -96,20 +102,34 @@ impl FStarProcess {
         // Set up response channel
         let (tx, rx) = mpsc::channel(100);
 
+        // Capture verbose flag for async tasks
+        let verbose = Arc::new(AtomicBool::new(is_verbose()));
+
         // Spawn stdout reader task
         let tx_clone = tx.clone();
+        let verbose_stdout = verbose.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
             loop {
                 line.clear();
                 match reader.read_line(&mut line).await {
-                    Ok(0) => break, // EOF
+                    Ok(0) => {
+                        if verbose_stdout.load(Ordering::Relaxed) {
+                            tracing::info!("[F* → MCP] <EOF>");
+                        }
+                        break; // EOF
+                    }
                     Ok(_) => {
                         let trimmed = line.trim();
                         if trimmed.is_empty() {
                             continue;
                         }
+                        
+                        if verbose_stdout.load(Ordering::Relaxed) {
+                            tracing::info!("[F* → MCP] {}", trimmed);
+                        }
+                        
                         match parse_response(trimmed) {
                             Ok(response) => {
                                 if tx_clone.send(response).await.is_err() {
@@ -117,7 +137,7 @@ impl FStarProcess {
                                 }
                             }
                             Err(e) => {
-                                tracing::warn!("Failed to parse F* response: {}", e);
+                                tracing::warn!("Failed to parse F* response: {} | raw: {}", e, trimmed);
                             }
                         }
                     }
@@ -129,7 +149,8 @@ impl FStarProcess {
             }
         });
 
-        // Spawn stderr reader task (just log)
+        // Spawn stderr reader task (always log stderr)
+        let verbose_stderr = verbose.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
             let mut line = String::new();
@@ -138,7 +159,14 @@ impl FStarProcess {
                 match reader.read_line(&mut line).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        tracing::warn!("F* stderr: {}", line.trim());
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            if verbose_stderr.load(Ordering::Relaxed) {
+                                tracing::info!("[F* stderr] {}", trimmed);
+                            } else {
+                                tracing::warn!("F* stderr: {}", trimmed);
+                            }
+                        }
                     }
                     Err(_) => break,
                 }

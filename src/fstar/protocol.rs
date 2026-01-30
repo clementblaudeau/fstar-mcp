@@ -1,6 +1,7 @@
 //! F* IDE protocol handling (JSON-L over stdio).
 
 use crate::fstar::messages::*;
+use crate::is_verbose;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::ChildStdin;
@@ -22,6 +23,11 @@ impl JsonlInterface {
     pub async fn send_message(&self, msg: &serde_json::Value) -> std::io::Result<()> {
         let mut writer = self.writer.lock().await;
         let json = serde_json::to_string(msg)?;
+        
+        if is_verbose() {
+            tracing::info!("[F* ← MCP] {}", json);
+        }
+        
         writer.write_all(json.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         writer.flush().await?;

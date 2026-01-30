@@ -7,17 +7,37 @@ mod session;
 use mcp::create_fstar_server;
 use pmcp::server::streamable_http_server::StreamableHttpServer;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
 
+/// Global verbose flag for detailed F* I/O logging
+pub static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Check if verbose mode is enabled
+pub fn is_verbose() -> bool {
+    VERBOSE.load(Ordering::Relaxed)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
+    // Check for --verbose flag
+    let args: Vec<String> = std::env::args().collect();
+    let verbose = args.iter().any(|a| a == "--verbose" || a == "-v");
+    VERBOSE.store(verbose, Ordering::Relaxed);
+
+    // Initialize logging - use debug level if verbose
+    let default_filter = if verbose {
+        "fstar_mcp=debug,pmcp=debug"
+    } else {
+        "fstar_mcp=info,pmcp=info"
+    };
+    
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "fstar_mcp=info,pmcp=info".into()),
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .init();
 
@@ -29,6 +49,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
 
     info!("Starting F* MCP server on {}", addr);
+    if verbose {
+        info!("Verbose mode enabled - logging all F* I/O");
+    }
 
     // Create the MCP server with tools
     let server = create_fstar_server()?;
@@ -50,6 +73,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║ Address: http://{:43} ║", bound_addr);
     println!("║ Mode:    Stateful (with session management)               ║");
+    if verbose {
+    println!("║ Verbose: ON (logging all F* I/O)                          ║");
+    }
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║ Available Tools:                                           ║");
     println!("║ • create_fstar     - Create F* session and typecheck      ║");
