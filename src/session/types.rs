@@ -10,6 +10,7 @@ pub struct CreateFStarResponse {
     pub status: String, // "ok" or "error"
     pub diagnostics: Vec<DiagnosticInfo>,
     pub fragments: Vec<FragmentInfo>,
+    pub created_at: String,
 }
 
 /// Response from typecheck_buffer tool
@@ -62,7 +63,9 @@ impl From<&IdeDiagnostic> for DiagnosticInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentInfo {
     pub start_line: u32,
+    pub start_column: u32,
     pub end_line: u32,
+    pub end_column: u32,
     pub status: String, // "ok", "lax-ok", "failed", "in-progress"
 }
 
@@ -70,7 +73,9 @@ impl From<&FragmentResult> for FragmentInfo {
     fn from(frag: &FragmentResult) -> Self {
         FragmentInfo {
             start_line: frag.range.beg.0,
+            start_column: frag.range.beg.1,
             end_line: frag.range.end.0,
+            end_column: frag.range.end.1,
             status: match frag.status {
                 FragmentStatus::Ok => "ok".to_string(),
                 FragmentStatus::LaxOk => "lax-ok".to_string(),

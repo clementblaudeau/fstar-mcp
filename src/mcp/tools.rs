@@ -66,6 +66,14 @@ impl ToolHandler for CreateFStarTool {
             }
         };
 
+        // Get created_at timestamp
+        let created_at = {
+            let sessions = SESSION_MANAGER.sessions.read().await;
+            sessions.get(&session_id)
+                .map(|s| s.created_at.to_rfc3339())
+                .unwrap_or_default()
+        };
+
         match result {
             Ok(fb_result) => {
                 let has_errors = fb_result.diagnostics.iter().any(|d| d.level == "error");
@@ -79,6 +87,7 @@ impl ToolHandler for CreateFStarTool {
                     },
                     diagnostics: fb_result.diagnostics.iter().map(DiagnosticInfo::from).collect(),
                     fragments: fb_result.fragments.iter().map(FragmentInfo::from).collect(),
+                    created_at,
                 };
 
                 Ok(serde_json::to_value(response)?)
@@ -124,6 +133,7 @@ struct TypecheckBufferArgs {
     session_id: String,
     code: String,
     kind: Option<String>,
+    lax: Option<bool>,
     to_line: Option<u32>,
     to_column: Option<u32>,
 }
@@ -134,7 +144,13 @@ impl ToolHandler for TypecheckBufferTool {
         let params: TypecheckBufferArgs = serde_json::from_value(args)
             .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {}", e)))?;
 
-        let kind = params.kind.unwrap_or_else(|| "full".to_string());
+        // lax: true is a shortcut for kind: "lax"
+        let kind = if params.lax.unwrap_or(false) {
+            "lax".to_string()
+        } else {
+            params.kind.unwrap_or_else(|| "full".to_string())
+        };
+        
         let to_position = match (params.to_line, params.to_column) {
             (Some(l), Some(c)) => Some((l, c)),
             _ => None,
@@ -191,10 +207,14 @@ impl ToolHandler for TypecheckBufferTool {
                         "type": "string",
                         "description": "The F* code to typecheck"
                     },
+                    "lax": {
+                        "type": "boolean",
+                        "description": "If true, use lax mode (admits all SMT queries). Shortcut for kind='lax'"
+                    },
                     "kind": {
                         "type": "string",
                         "enum": ["full", "lax", "cache", "reload-deps", "verify-to-position", "lax-to-position"],
-                        "description": "Typecheck kind (default: full)"
+                        "description": "Typecheck kind (default: full). Overridden by lax=true"
                     },
                     "to_line": {
                         "type": "integer",
@@ -584,6 +604,152 @@ impl ToolHandler for CloseSessionTool {
 }
 
 // ============================================================================
+// Tool: list_sessions
+// ============================================================================
+
+pub struct ListSessionsTool;
+
+#[async_trait]
+impl ToolHandler for ListSessionsTool {
+    async fn handle(&self, _args: Value, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<Value> {
+        let sessions = SESSION_MANAGER.list_sessions().await;
+        
+        Ok(json!({
+            "sessions": sessions,
+            "count": sessions.len()
+        }))
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(ToolInfo::new(
+            "list_sessions",
+            Some("List all active F* sessions with status information".to_string()),
+            json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        ))
+    }
+}
+
+// ============================================================================
+// Tool: lookup_by_name  
+// ============================================================================
+
+pub struct LookupByNameTool;
+
+#[derive(Debug, Deserialize)]
+struct LookupByNameArgs {
+    session_id: String,
+    name: String,
+}
+
+#[async_trait]
+impl ToolHandler for LookupByNameTool {
+    async fn handle(&self, args: Value, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<Value> {
+        let params: LookupByNameArgs = serde_json::from_value(args)
+            .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {}", e)))?;
+
+        // Get the file path from the session
+        let file_path = {
+            let sessions = SESSION_MANAGER.sessions.read().await;
+            match sessions.get(&params.session_id) {
+                Some(session) => session.file_path.to_string_lossy().to_string(),
+                None => {
+                    return Err(pmcp::Error::validation(format!(
+                        "Session not found: {}",
+                        params.session_id
+                    )));
+                }
+            }
+        };
+
+        // Lookup at line 1, column 0 with the given symbol name
+        // This is a simplified lookup that doesn't require position
+        let result = {
+            let mut sessions = SESSION_MANAGER.sessions.write().await;
+            match sessions.get_mut(&params.session_id) {
+                Some(session) => {
+                    session.process
+                        .lookup(&file_path, 1, 0, &params.name)
+                        .await
+                }
+                None => {
+                    return Err(pmcp::Error::validation(format!(
+                        "Session not found: {}",
+                        params.session_id
+                    )));
+                }
+            }
+        };
+
+        match result {
+            Ok(Some(lookup)) => {
+                let response = match lookup {
+                    IdeLookupResponse::Symbol(s) => LookupResponse {
+                        kind: "symbol".to_string(),
+                        name: Some(s.name),
+                        type_info: s.type_info,
+                        documentation: s.documentation,
+                        defined_at: s.defined_at.as_ref().map(RangeInfo::from),
+                    },
+                    IdeLookupResponse::Module(m) => LookupResponse {
+                        kind: "module".to_string(),
+                        name: Some(m.name),
+                        type_info: None,
+                        documentation: None,
+                        defined_at: Some(RangeInfo {
+                            file: m.path,
+                            start_line: 1,
+                            start_column: 0,
+                            end_line: 1,
+                            end_column: 0,
+                        }),
+                    },
+                };
+                Ok(serde_json::to_value(response)?)
+            }
+            Ok(None) => {
+                let response = LookupResponse {
+                    kind: "not_found".to_string(),
+                    name: None,
+                    type_info: None,
+                    documentation: None,
+                    defined_at: None,
+                };
+                Ok(serde_json::to_value(response)?)
+            }
+            Err(e) => Ok(json!({
+                "kind": "error",
+                "error": format!("Lookup failed: {}", e)
+            })),
+        }
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(ToolInfo::new(
+            "lookup_by_name",
+            Some("Look up a symbol by name in the current scope (simpler than lookup_symbol, doesn't require position)".to_string()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_fstar"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "The fully qualified name to look up (e.g., 'FStar.List.map')"
+                    }
+                },
+                "required": ["session_id", "name"]
+            }),
+        ))
+    }
+}
+
+// ============================================================================
 // Server Builder
 // ============================================================================
 
@@ -593,9 +759,11 @@ pub fn create_fstar_server() -> Result<Server, Box<dyn std::error::Error>> {
         .version("0.1.0")
         .capabilities(ServerCapabilities::tools_only())
         .tool("create_fstar", CreateFStarTool)
+        .tool("list_sessions", ListSessionsTool)
         .tool("typecheck_buffer", TypecheckBufferTool)
         .tool("update_buffer", UpdateBufferTool)
         .tool("lookup_symbol", LookupSymbolTool)
+        .tool("lookup_by_name", LookupByNameTool)
         .tool("autocomplete", AutocompleteTool)
         .tool("restart_solver", RestartSolverTool)
         .tool("close_session", CloseSessionTool)

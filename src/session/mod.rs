@@ -3,6 +3,7 @@
 pub mod types;
 
 use crate::fstar::{FStarConfig, FStarProcess, FullBufferResult, ProcessError};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +28,8 @@ pub struct Session {
     pub id: String,
     pub file_path: PathBuf,
     pub process: FStarProcess,
+    pub created_at: DateTime<Utc>,
+    pub last_activity: DateTime<Utc>,
 }
 
 impl Session {
@@ -38,16 +41,25 @@ impl Session {
     ) -> Result<Self, SessionError> {
         let id = Uuid::new_v4().to_string();
         let process = FStarProcess::spawn(config, file_path, lax).await?;
+        let now = Utc::now();
 
         Ok(Session {
             id,
             file_path: file_path.to_path_buf(),
             process,
+            created_at: now,
+            last_activity: now,
         })
+    }
+
+    /// Update last activity timestamp
+    pub fn touch(&mut self) {
+        self.last_activity = Utc::now();
     }
 
     /// Run initial typecheck
     pub async fn typecheck(&mut self, code: &str) -> Result<FullBufferResult, ProcessError> {
+        self.touch();
         self.process.full_buffer_query(code, "full", None).await
     }
 
@@ -58,8 +70,19 @@ impl Session {
         kind: &str,
         to_position: Option<(u32, u32)>,
     ) -> Result<FullBufferResult, ProcessError> {
+        self.touch();
         self.process.full_buffer_query(code, kind, to_position).await
     }
+}
+
+/// Session info for list_sessions response
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub file_path: String,
+    pub created_at: String,
+    pub last_activity: String,
+    pub idle_seconds: i64,
 }
 
 /// Manages multiple F* sessions
@@ -118,6 +141,23 @@ impl SessionManager {
         }
 
         Ok(session_id)
+    }
+
+    /// List all active sessions
+    pub async fn list_sessions(&self) -> Vec<SessionInfo> {
+        let sessions = self.sessions.read().await;
+        let now = Utc::now();
+        
+        sessions.values().map(|s| {
+            let idle_seconds = (now - s.last_activity).num_seconds();
+            SessionInfo {
+                session_id: s.id.clone(),
+                file_path: s.file_path.to_string_lossy().to_string(),
+                created_at: s.created_at.to_rfc3339(),
+                last_activity: s.last_activity.to_rfc3339(),
+                idle_seconds,
+            }
+        }).collect()
     }
 
     /// Close a session
