@@ -94,47 +94,34 @@ pub enum IdeLookupResponse {
 pub type IdeAutoCompleteOption = (u32, String, String);
 
 /// Proof state from tactics
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct IdeProofState {
-    #[allow(dead_code)]
-    label: String,
-    #[allow(dead_code)]
-    depth: i32,
-    #[allow(dead_code)]
-    urgency: i32,
-    #[allow(dead_code)]
-    goals: Vec<IdeProofStateContextualGoal>,
+    pub label: String,
+    pub depth: i32,
+    pub urgency: i32,
+    pub goals: Vec<IdeProofStateContextualGoal>,
     #[serde(rename = "smt-goals")]
-    #[allow(dead_code)]
-    smt_goals: Vec<IdeProofStateContextualGoal>,
-    #[allow(dead_code)]
-    location: FStarRange,
+    pub smt_goals: Vec<IdeProofStateContextualGoal>,
+    pub location: FStarRange,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct IdeProofStateContextualGoal {
-    #[allow(dead_code)]
-    hyps: Vec<IdeHypothesis>,
-    #[allow(dead_code)]
-    goal: IdeProofStateGoal,
+    pub hyps: Vec<IdeHypothesis>,
+    pub goal: IdeProofStateGoal,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct IdeHypothesis {
-    #[allow(dead_code)]
-    name: String,
+    pub name: String,
     #[serde(rename = "type")]
-    #[allow(dead_code)]
-    type_info: String,
+    pub type_info: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct IdeProofStateGoal {
-    #[allow(dead_code)]
-    witness: String,
+    pub witness: String,
     #[serde(rename = "type")]
-    #[allow(dead_code)]
-    type_info: String,
-    #[allow(dead_code)]
-    label: String,
+    pub type_info: String,
+    pub label: String,
 }

@@ -173,6 +173,75 @@ impl MockFStarConfig {
         );
         self
     }
+
+    /// Add a full-buffer response with proof states (from tactics).
+    pub fn with_proof_states(mut self, proof_states: Vec<(u32, &str, Vec<&str>)>) -> Self {
+        let mut messages = vec![
+            serde_json::json!({
+                "kind": "message",
+                "level": "progress",
+                "contents": { "stage": "full-buffer-started" }
+            }),
+        ];
+
+        // Add proof-state messages for each proof state
+        for (line, label, goals) in proof_states {
+            let goal_objs: Vec<serde_json::Value> = goals
+                .iter()
+                .map(|g| {
+                    serde_json::json!({
+                        "hyps": [],
+                        "goal": {
+                            "witness": "?u",
+                            "type": g,
+                            "label": ""
+                        }
+                    })
+                })
+                .collect();
+
+            messages.push(serde_json::json!({
+                "kind": "message",
+                "level": "proof-state",
+                "contents": {
+                    "label": label,
+                    "depth": 0,
+                    "urgency": 1,
+                    "goals": goal_objs,
+                    "smt-goals": [],
+                    "location": {
+                        "fname": "Test.fst",
+                        "beg": [line, 0],
+                        "end": [line, 50]
+                    }
+                }
+            }));
+        }
+
+        messages.push(serde_json::json!({
+            "kind": "message",
+            "level": "progress",
+            "contents": {
+                "stage": "full-buffer-fragment-ok",
+                "ranges": { "fname": "Test.fst", "beg": [1, 0], "end": [20, 0] },
+                "code-fragment": {
+                    "code-digest": "abc123",
+                    "range": { "fname": "Test.fst", "beg": [1, 0], "end": [20, 0] }
+                }
+            }
+        }));
+        messages.push(serde_json::json!({
+            "kind": "message",
+            "level": "progress",
+            "contents": { "stage": "full-buffer-finished" }
+        }));
+
+        self.responses.insert(
+            "full-buffer".to_string(),
+            MockResponse::FullBufferStream { messages },
+        );
+        self
+    }
 }
 
 /// A mock F* IDE process that responds to queries according to configuration.

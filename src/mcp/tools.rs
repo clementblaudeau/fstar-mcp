@@ -750,6 +750,80 @@ impl ToolHandler for LookupByNameTool {
 }
 
 // ============================================================================
+// Get Proof Context Tool
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct GetProofContextInput {
+    session_id: String,
+    line: Option<u32>,
+}
+
+pub struct GetProofContextTool;
+
+#[async_trait]
+impl ToolHandler for GetProofContextTool {
+    async fn handle(&self, args: Value, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<Value> {
+        let params: GetProofContextInput = serde_json::from_value(args)
+            .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {}", e)))?;
+
+        let sessions = SESSION_MANAGER.sessions.read().await;
+        match sessions.get(&params.session_id) {
+            Some(session) => {
+                if let Some(line) = params.line {
+                    // Find proof state at specific line
+                    if let Some(proof_state) = session.find_proof_state_at_line(line) {
+                        Ok(json!({
+                            "found": true,
+                            "line": line,
+                            "proof_state": proof_state
+                        }))
+                    } else {
+                        Ok(json!({
+                            "found": false,
+                            "line": line,
+                            "message": "No proof state at this line"
+                        }))
+                    }
+                } else {
+                    // Return all proof states
+                    let proof_states = session.get_proof_states();
+                    Ok(json!({
+                        "count": proof_states.len(),
+                        "proof_states": proof_states
+                    }))
+                }
+            }
+            None => Err(pmcp::Error::validation(format!(
+                "Session not found: {}",
+                params.session_id
+            ))),
+        }
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(ToolInfo::new(
+            "get_proof_context",
+            Some("Get proof obligations and goals at a position. Returns proof states collected during last typecheck. If line is provided, returns proof state at that line; otherwise returns all proof states.".to_string()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_fstar"
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Optional line number to get proof state at"
+                    }
+                },
+                "required": ["session_id"]
+            }),
+        ))
+    }
+}
+
+// ============================================================================
 // Server Builder
 // ============================================================================
 
@@ -767,6 +841,7 @@ pub fn create_fstar_server() -> Result<Server, Box<dyn std::error::Error>> {
         .tool("autocomplete", AutocompleteTool)
         .tool("restart_solver", RestartSolverTool)
         .tool("close_session", CloseSessionTool)
+        .tool("get_proof_context", GetProofContextTool)
         .build()
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 

@@ -2,7 +2,7 @@
 
 pub mod types;
 
-use crate::fstar::{FStarConfig, FStarProcess, FullBufferResult, ProcessError};
+use crate::fstar::{FStarConfig, FStarProcess, FullBufferResult, IdeProofState, ProcessError};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,8 @@ pub struct Session {
     pub process: FStarProcess,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
+    /// Proof states collected from the last typecheck (from tactics)
+    pub proof_states: Vec<IdeProofState>,
 }
 
 impl Session {
@@ -49,6 +51,7 @@ impl Session {
             process,
             created_at: now,
             last_activity: now,
+            proof_states: Vec::new(),
         })
     }
 
@@ -57,13 +60,15 @@ impl Session {
         self.last_activity = Utc::now();
     }
 
-    /// Run initial typecheck
+    /// Run initial typecheck and store proof states
     pub async fn typecheck(&mut self, code: &str) -> Result<FullBufferResult, ProcessError> {
         self.touch();
-        self.process.full_buffer_query(code, "full", None).await
+        let result = self.process.full_buffer_query(code, "full", None).await?;
+        self.proof_states = result.proof_states.clone();
+        Ok(result)
     }
 
-    /// Run typecheck with specified kind
+    /// Run typecheck with specified kind and store proof states
     pub async fn typecheck_with_kind(
         &mut self,
         code: &str,
@@ -71,7 +76,19 @@ impl Session {
         to_position: Option<(u32, u32)>,
     ) -> Result<FullBufferResult, ProcessError> {
         self.touch();
-        self.process.full_buffer_query(code, kind, to_position).await
+        let result = self.process.full_buffer_query(code, kind, to_position).await?;
+        self.proof_states = result.proof_states.clone();
+        Ok(result)
+    }
+
+    /// Find proof state at a given line
+    pub fn find_proof_state_at_line(&self, line: u32) -> Option<&IdeProofState> {
+        self.proof_states.iter().find(|ps| ps.location.beg.0 == line)
+    }
+
+    /// Get all proof states
+    pub fn get_proof_states(&self) -> &[IdeProofState] {
+        &self.proof_states
     }
 }
 

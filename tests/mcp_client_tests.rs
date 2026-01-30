@@ -644,3 +644,147 @@ mod error_handling_tests {
         assert!(responses.is_empty()); // Crash returns no responses
     }
 }
+
+// ============================================================================
+// Tests for get_proof_context tool
+// ============================================================================
+
+#[cfg(test)]
+mod get_proof_context_tests {
+    use super::*;
+
+    #[test]
+    fn test_proof_states_collected() {
+        // Test that proof states are included in full-buffer responses
+        let config = MockFStarConfig::new().with_proof_states(vec![
+            (5, "goal1", vec!["squash (x == 1)"]),
+            (10, "goal2", vec!["squash (y == 2)", "squash (z == 3)"]),
+        ]);
+        let mut fstar = MockFStarProcess::new(config);
+
+        let query = serde_json::json!({
+            "query-id": "1",
+            "query": "full-buffer",
+            "args": {
+                "kind": "full",
+                "code": "module Test\nlet x = 1",
+                "line": 0,
+                "column": 0,
+                "with-symbols": false
+            }
+        });
+
+        let responses = fstar.process_query(&query);
+        
+        // Should have proof-state messages in the stream
+        let proof_state_msgs: Vec<_> = responses
+            .iter()
+            .filter(|r| r["level"] == "proof-state")
+            .collect();
+        
+        assert_eq!(proof_state_msgs.len(), 2);
+        assert_eq!(proof_state_msgs[0]["contents"]["label"], "goal1");
+        assert_eq!(proof_state_msgs[1]["contents"]["label"], "goal2");
+    }
+
+    #[test]
+    fn test_proof_state_at_line() {
+        let config = MockFStarConfig::new().with_proof_states(vec![
+            (5, "goal_at_line_5", vec!["squash (x == 1)"]),
+        ]);
+        let mut fstar = MockFStarProcess::new(config);
+
+        let query = serde_json::json!({
+            "query-id": "1",
+            "query": "full-buffer",
+            "args": {
+                "kind": "full",
+                "code": "module Test\nlet x = 1",
+                "line": 0,
+                "column": 0,
+                "with-symbols": false
+            }
+        });
+
+        let responses = fstar.process_query(&query);
+        
+        // Find proof state at line 5
+        let proof_state = responses
+            .iter()
+            .find(|r| {
+                r["level"] == "proof-state" && 
+                r["contents"]["location"]["beg"][0] == 5
+            });
+        
+        assert!(proof_state.is_some());
+        let ps = proof_state.unwrap();
+        assert_eq!(ps["contents"]["label"], "goal_at_line_5");
+        
+        // Goals should be present
+        let goals = ps["contents"]["goals"].as_array().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[0]["goal"]["type"], "squash (x == 1)");
+    }
+
+    #[test]
+    fn test_no_proof_states() {
+        // Regular typecheck without tactics should have no proof states
+        let config = MockFStarConfig::new().with_successful_typecheck();
+        let mut fstar = MockFStarProcess::new(config);
+
+        let query = serde_json::json!({
+            "query-id": "1",
+            "query": "full-buffer",
+            "args": {
+                "kind": "full",
+                "code": "module Test\nlet x = 1",
+                "line": 0,
+                "column": 0,
+                "with-symbols": false
+            }
+        });
+
+        let responses = fstar.process_query(&query);
+        
+        // Should have no proof-state messages
+        let proof_state_msgs: Vec<_> = responses
+            .iter()
+            .filter(|r| r["level"] == "proof-state")
+            .collect();
+        
+        assert_eq!(proof_state_msgs.len(), 0);
+    }
+
+    #[test]
+    fn test_multiple_goals_in_proof_state() {
+        let config = MockFStarConfig::new().with_proof_states(vec![
+            (7, "multi_goal", vec!["goal1: nat", "goal2: bool", "goal3: unit"]),
+        ]);
+        let mut fstar = MockFStarProcess::new(config);
+
+        let query = serde_json::json!({
+            "query-id": "1",
+            "query": "full-buffer",
+            "args": {
+                "kind": "full",
+                "code": "module Test",
+                "line": 0,
+                "column": 0,
+                "with-symbols": false
+            }
+        });
+
+        let responses = fstar.process_query(&query);
+        
+        let proof_state = responses
+            .iter()
+            .find(|r| r["level"] == "proof-state")
+            .unwrap();
+        
+        let goals = proof_state["contents"]["goals"].as_array().unwrap();
+        assert_eq!(goals.len(), 3);
+        assert_eq!(goals[0]["goal"]["type"], "goal1: nat");
+        assert_eq!(goals[1]["goal"]["type"], "goal2: bool");
+        assert_eq!(goals[2]["goal"]["type"], "goal3: unit");
+    }
+}

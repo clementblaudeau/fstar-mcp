@@ -78,15 +78,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║ Available Tools:                                           ║");
-    println!("║ • create_fstar     - Create F* session and typecheck      ║");
-    println!("║ • list_sessions    - List active sessions with status     ║");
-    println!("║ • typecheck_buffer - Typecheck code (supports lax flag)   ║");
-    println!("║ • update_buffer    - Add file to virtual file system      ║");
-    println!("║ • lookup_symbol    - Get symbol info at position          ║");
-    println!("║ • lookup_by_name   - Get symbol info by name              ║");
-    println!("║ • autocomplete     - Get completion suggestions           ║");
-    println!("║ • restart_solver   - Restart Z3 SMT solver                ║");
-    println!("║ • close_session    - Close F* session                     ║");
+    println!("║ • create_fstar      - Create F* session and typecheck      ║");
+    println!("║ • list_sessions     - List active sessions with status     ║");
+    println!("║ • typecheck_buffer  - Typecheck code (supports lax flag)   ║");
+    println!("║ • update_buffer     - Add file to virtual file system      ║");
+    println!("║ • lookup_symbol     - Get symbol info at position          ║");
+    println!("║ • lookup_by_name    - Get symbol info by name              ║");
+    println!("║ • get_proof_context - Get proof goals from tactics         ║");
+    println!("║ • autocomplete      - Get completion suggestions           ║");
+    println!("║ • restart_solver    - Restart Z3 SMT solver                ║");
+    println!("║ • close_session     - Close F* session                     ║");
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
     println!("Press Ctrl+C to stop the server");
