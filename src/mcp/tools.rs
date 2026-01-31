@@ -76,7 +76,7 @@ impl ToolHandler for CreateSessionTool {
 
         // Create session with MCP session tracking
         let session_id = SESSION_MANAGER
-            .create_session_with_mcp(&file_path, config, mcp_session_id)
+            .create_session(&file_path, config, mcp_session_id)
             .await
             .map_err(|e| pmcp::Error::Internal(format!("Failed to create session: {}", e)))?;
 

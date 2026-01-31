@@ -143,15 +143,6 @@ impl SessionManager {
         &self,
         file_path: &Path,
         config: FStarConfig,
-    ) -> Result<String, SessionError> {
-        self.create_session_with_mcp(file_path, config, None).await
-    }
-
-    /// Create a new session with MCP session tracking
-    pub async fn create_session_with_mcp(
-        &self,
-        file_path: &Path,
-        config: FStarConfig,
         mcp_session_id: Option<String>,
     ) -> Result<String, SessionError> {
         // Check for existing session for this file
