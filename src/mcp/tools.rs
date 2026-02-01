@@ -20,6 +20,18 @@ lazy_static::lazy_static! {
     pub static ref SESSION_MANAGER: Arc<SessionManager> = Arc::new(SessionManager::new());
 }
 
+/// Helper to generate appropriate error message for missing sessions
+async fn session_not_found_error(session_id: &str) -> pmcp::Error {
+    if let Some(timeout_secs) = SESSION_MANAGER.get_timeout_info(session_id).await {
+        pmcp::Error::validation(format!(
+            "Session timed out after {} seconds: {}. Create a new session with a higher timeout.",
+            timeout_secs, session_id
+        ))
+    } else {
+        pmcp::Error::validation(format!("Session not found: {}", session_id))
+    }
+}
+
 // ============================================================================
 // Tool: create_session
 // ============================================================================
@@ -38,6 +50,8 @@ struct CreateSessionArgs {
     include_dirs: Option<Vec<String>>,
     /// F* command-line options
     options: Option<Vec<String>>,
+    /// Timeout in seconds - kills F* process after this duration
+    timeout: Option<u64>,
 }
 
 #[async_trait]
@@ -76,7 +90,7 @@ impl ToolHandler for CreateSessionTool {
 
         // Create session with MCP session tracking
         let session_id = SESSION_MANAGER
-            .create_session(&file_path, config, mcp_session_id)
+            .create_session(&file_path, config, mcp_session_id, params.timeout)
             .await
             .map_err(|e| pmcp::Error::Internal(format!("Failed to create session: {}", e)))?;
 
@@ -162,6 +176,10 @@ impl ToolHandler for CreateSessionTool {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "F* command-line options (e.g., ['--cache_dir', '.cache'])."
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds. Kills the F* process after this duration."
                     }
                 },
                 "required": []
@@ -209,10 +227,8 @@ impl ToolHandler for TypecheckBufferTool {
             match sessions.get_mut(&params.session_id) {
                 Some(session) => session.typecheck_with_kind(&params.code, &kind, to_position).await,
                 None => {
-                    return Err(pmcp::Error::validation(format!(
-                        "Session not found: {}",
-                        params.session_id
-                    )));
+                    drop(sessions);
+                    return Err(session_not_found_error(&params.session_id).await);
                 }
             }
         };
@@ -303,10 +319,8 @@ impl ToolHandler for UpdateBufferTool {
             match sessions.get_mut(&params.session_id) {
                 Some(session) => session.process.vfs_add(Some(&params.file_path), &params.contents).await,
                 None => {
-                    return Err(pmcp::Error::validation(format!(
-                        "Session not found: {}",
-                        params.session_id
-                    )));
+                    drop(sessions);
+                    return Err(session_not_found_error(&params.session_id).await);
                 }
             }
         };
@@ -382,10 +396,8 @@ impl ToolHandler for LookupSymbolTool {
                         .await
                 }
                 None => {
-                    return Err(pmcp::Error::validation(format!(
-                        "Session not found: {}",
-                        params.session_id
-                    )));
+                    drop(sessions);
+                    return Err(session_not_found_error(&params.session_id).await);
                 }
             }
         };
@@ -489,10 +501,8 @@ impl ToolHandler for RestartSolverTool {
             match sessions.get_mut(&params.session_id) {
                 Some(session) => session.process.restart_solver().await,
                 None => {
-                    return Err(pmcp::Error::validation(format!(
-                        "Session not found: {}",
-                        params.session_id
-                    )));
+                    drop(sessions);
+                    return Err(session_not_found_error(&params.session_id).await);
                 }
             }
         };
@@ -553,10 +563,20 @@ impl ToolHandler for CloseSessionTool {
                 };
                 Ok(serde_json::to_value(response)?)
             }
-            Err(e) => Ok(json!({
-                "status": "error",
-                "error": format!("Close session failed: {}", e)
-            })),
+            Err(_) => {
+                // Check if it was a timeout
+                if let Some(timeout_secs) = SESSION_MANAGER.get_timeout_info(&params.session_id).await {
+                    Ok(json!({
+                        "status": "error",
+                        "error": format!("Session already closed due to timeout after {} seconds: {}", timeout_secs, params.session_id)
+                    }))
+                } else {
+                    Ok(json!({
+                        "status": "error",
+                        "error": format!("Session not found: {}", params.session_id)
+                    }))
+                }
+            }
         }
     }
 
@@ -653,10 +673,10 @@ impl ToolHandler for GetProofContextTool {
                     }))
                 }
             }
-            None => Err(pmcp::Error::validation(format!(
-                "Session not found: {}",
-                params.session_id
-            ))),
+            None => {
+                drop(sessions);
+                Err(session_not_found_error(&params.session_id).await)
+            }
         }
     }
 

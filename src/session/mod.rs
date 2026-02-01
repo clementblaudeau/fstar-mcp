@@ -121,6 +121,8 @@ pub struct SessionManager {
     file_to_session: Arc<RwLock<HashMap<PathBuf, String>>>,
     /// Maps MCP session IDs to F* session IDs they own
     mcp_to_fstar_sessions: Arc<RwLock<HashMap<String, HashSet<String>>>>,
+    /// Tracks session IDs that were closed due to timeout, with the timeout duration
+    timed_out_sessions: Arc<RwLock<HashMap<String, u64>>>,
 }
 
 impl Default for SessionManager {
@@ -135,7 +137,14 @@ impl SessionManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             file_to_session: Arc::new(RwLock::new(HashMap::new())),
             mcp_to_fstar_sessions: Arc::new(RwLock::new(HashMap::new())),
+            timed_out_sessions: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Check if a session timed out, returning the timeout duration if so
+    pub async fn get_timeout_info(&self, session_id: &str) -> Option<u64> {
+        let timed_out = self.timed_out_sessions.read().await;
+        timed_out.get(session_id).copied()
     }
 
     /// Create a new session, replacing any existing session for the same file
@@ -144,6 +153,7 @@ impl SessionManager {
         file_path: &Path,
         config: FStarConfig,
         mcp_session_id: Option<String>,
+        timeout_secs: Option<u64>,
     ) -> Result<String, SessionError> {
         // Check for existing session for this file
         let existing_session_id = {
@@ -181,6 +191,59 @@ impl SessionManager {
                 .entry(mcp_id)
                 .or_insert_with(HashSet::new)
                 .insert(session_id.clone());
+        }
+
+        // Spawn timeout task if timeout is specified
+        if let Some(secs) = timeout_secs {
+            let session_id_clone = session_id.clone();
+            let sessions = self.sessions.clone();
+            let file_to_session = self.file_to_session.clone();
+            let mcp_to_fstar_sessions = self.mcp_to_fstar_sessions.clone();
+            let timed_out_sessions = self.timed_out_sessions.clone();
+            
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                
+                // Close the session after timeout
+                let session = {
+                    let mut sessions = sessions.write().await;
+                    sessions.remove(&session_id_clone)
+                };
+
+                if let Some(mut session) = session {
+                    tracing::info!(
+                        session_id = %session_id_clone,
+                        timeout_secs = secs,
+                        "Session timed out, killing F* process"
+                    );
+                    
+                    // Record that this session timed out with its duration
+                    {
+                        let mut timed_out = timed_out_sessions.write().await;
+                        timed_out.insert(session_id_clone.clone(), secs);
+                    }
+                    
+                    // Remove from file mapping
+                    {
+                        let mut file_map = file_to_session.write().await;
+                        file_map.remove(&session.file_path);
+                    }
+
+                    // Remove from MCP session mapping
+                    if let Some(mcp_id) = &session.mcp_session_id {
+                        let mut mcp_map = mcp_to_fstar_sessions.write().await;
+                        if let Some(fstar_ids) = mcp_map.get_mut(mcp_id) {
+                            fstar_ids.remove(&session_id_clone);
+                            if fstar_ids.is_empty() {
+                                mcp_map.remove(mcp_id);
+                            }
+                        }
+                    }
+
+                    // Kill the process
+                    session.process.kill().await.ok();
+                }
+            });
         }
 
         Ok(session_id)
