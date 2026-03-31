@@ -18,6 +18,23 @@ cargo build --release
 ./target/release/fstar-mcp
 ```
 
+## Usage
+
+An `.mcp.json` file typically contains :
+
+```json
+{
+  "mcpServers": {
+    "fstar": {
+      "type": "stdio",
+      "command": "/home/cblaudeau/fstar-mcp/target/release/fstar-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
 ## MCP Tools
 
 ### `create_session`
